@@ -1,0 +1,9 @@
+(extern write fn)
+(fn funnystring *char ()
+    (ret "gem\n")
+)
+
+(fn main int ()
+    (let x *char (() funnystring))
+    (() write 1 x 4)
+)
