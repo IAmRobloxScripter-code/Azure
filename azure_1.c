@@ -28,6 +28,20 @@ const char* lex_token_kind_to_string(LEX_TOKEN_KIND kind) {
       return "TOK_SLASH";
     case TOK_EQUAL:
       return "TOK_EQUAL";
+    case TOK_EQUAL_EQUAL:
+      return "TOK_EQUAL_EQUAL";
+    case TOK_NOT_EQUAL:
+      return "TOK_NOT_EQUAL";
+    case TOK_GREATER_THAN:
+      return "TOK_GREATER_THAN";
+    case TOK_LESS_THAN:
+      return "TOK_LESS_THAN";
+    case TOK_GREATER_THAN_EQUAL:
+      return "TOK_GREATER_THAN_EQUAL";
+    case TOK_LESS_THAN_EQUAL:
+      return "TOK_LESS_THAN_EQUAL";
+    case TOK_UNARY_NOT:
+      return "TOK_UNARY_NOT";
     case TOK_OPEN_PAREN:
       return "TOK_OPEN_PAREN";
     case TOK_CLOSING_PAREN:
@@ -155,7 +169,38 @@ LEX_TOKEN_ARRAY* lex_input_str(const char* input) {
       GROW_LEX_TOKEN_ARRAY(tokens, make_token(TOK_SLASH, "/", line));
       index++;
     } else if (character == '=') {
+      if (input[index + 1] == '=') {
+        GROW_LEX_TOKEN_ARRAY(tokens, make_token(TOK_EQUAL_EQUAL, "==", line));
+        index += 2;
+        continue;
+      }
       GROW_LEX_TOKEN_ARRAY(tokens, make_token(TOK_EQUAL, "=", line));
+      index++;
+    } else if (character == '>') {
+      if (input[index + 1] == '=') {
+        GROW_LEX_TOKEN_ARRAY(tokens,
+                             make_token(TOK_GREATER_THAN_EQUAL, ">=", line));
+        index += 2;
+        continue;
+      }
+      GROW_LEX_TOKEN_ARRAY(tokens, make_token(TOK_GREATER_THAN, ">", line));
+      index++;
+    } else if (character == '<') {
+      if (input[index + 1] == '=') {
+        GROW_LEX_TOKEN_ARRAY(tokens,
+                             make_token(TOK_LESS_THAN_EQUAL, "<=", line));
+        index += 2;
+        continue;
+      }
+      GROW_LEX_TOKEN_ARRAY(tokens, make_token(TOK_LESS_THAN, "<", line));
+      index++;
+    } else if (character == '!') {
+      if (input[index + 1] == '=') {
+        GROW_LEX_TOKEN_ARRAY(tokens, make_token(TOK_NOT_EQUAL, "!=", line));
+        index += 2;
+        continue;
+      }
+      GROW_LEX_TOKEN_ARRAY(tokens, make_token(TOK_UNARY_NOT, "<", line));
       index++;
     } else if (character >= '0' && character <= '9') {
       DYNAMIC_STR* number = malloc(sizeof(DYNAMIC_STR));
@@ -314,6 +359,8 @@ AST_NODE* make_ast_node(AST_KIND kind) {
 AST_NODE* parse_stmt(PARSER* self);
 AST_NODE* parse_var_decl(PARSER* self);
 AST_NODE* parse_fn_decl(PARSER* self);
+AST_NODE* parse_is_decl_stmt(PARSER* self);
+AST_NODE* parse_loop_decl_stmt(PARSER* self);
 AST_NODE* parse_expr(PARSER* self);
 AST_NODE* parse_binary_expr(PARSER* self);
 AST_NODE* parse_square_brackets(PARSER* self);
@@ -338,17 +385,36 @@ AST_NODE* parse_stmt(PARSER* self) {
     case TOK_ASTERIK:
     case TOK_SLASH:
     case TOK_EQUAL:
+    case TOK_EQUAL_EQUAL:
+    case TOK_NOT_EQUAL:
+    case TOK_GREATER_THAN:
+    case TOK_LESS_THAN:
+    case TOK_GREATER_THAN_EQUAL:
+    case TOK_LESS_THAN_EQUAL:
       node = parse_binary_expr(self);
       break;
     case TOK_OPEN_SQUARE_PAREN:
       node = parse_square_brackets(self);
       break;
-
     case TOK_RETURN:
       node = parse_return_expr(self);
       break;
     case TOK_EXTERN:
       node = parse_extern_expr(self);
+      break;
+    case TOK_IS:
+      node = parse_is_decl_stmt(self);
+      break;
+    case TOK_LOOP:
+      node = parse_loop_decl_stmt(self);
+      break;
+    case TOK_BREAK:
+      free(eat(self));
+      node = make_ast_node(BREAK_EXPR);
+      break;
+    case TOK_CONTINUE:
+      free(eat(self));
+      node = make_ast_node(CONTINUE_EXPR);
       break;
     default:
       node = parse_expr(self);
@@ -537,10 +603,11 @@ AST_NODE* parse_binary_expr(PARSER* self) {
   AST_NODE* right =
       at(self)->kind == TOK_OPEN_PAREN ? parse_stmt(self) : parse_expr(self);
 
-  AST_NODE* node = make_ast_node(
-      operator_token->value[0] != '=' ? BINARY_EXPR : ASSIGNMENT_EXPR);
+  AST_NODE* node = make_ast_node((strcmp(operator_token->value, "=") != 0)
+                                     ? BINARY_EXPR
+                                     : ASSIGNMENT_EXPR);
   AST_NODE_BINARY_EXPR* binary_expr_node = malloc(sizeof(AST_NODE_BINARY_EXPR));
-  binary_expr_node->operator = operator_token->value[0];
+  binary_expr_node->operator = operator_token->value;
   binary_expr_node->left = left;
   binary_expr_node->right = right;
   node->BINARY_EXPR = binary_expr_node;
@@ -564,6 +631,25 @@ AST_NODE* parse_var_decl(PARSER* self) {
   var_decl_node->name = identifier->value;
   node->VAR_DECL = var_decl_node;
   free(identifier);
+  return node;
+}
+
+AST_NODE* parse_loop_decl_stmt(PARSER* self) {
+  free(eat(self));
+  AST_NODE_ARRAY* body = malloc(sizeof(AST_NODE_ARRAY));
+  body->count = 0;
+  body->capacity = 16;
+  body->array = malloc(sizeof(AST_NODE*) * body->capacity);
+
+  while (at(self)->kind != TOK_EOF && at(self)->kind != TOK_CLOSING_PAREN) {
+    GROW_AST_NODE_ARRAY(body, parse_stmt(self));
+  }
+
+  AST_NODE* node = make_ast_node(LOOP_STMT);
+  AST_NODE_LOOP_STMT* loop_stmt_node = malloc(sizeof(AST_NODE_LOOP_STMT));
+  loop_stmt_node->body = body;
+  node->LOOP_DECL_STMT = loop_stmt_node;
+
   return node;
 }
 
@@ -613,6 +699,48 @@ AST_NODE* parse_fn_decl(PARSER* self) {
   fn_decl_node->name = identifier->value;
   node->FN_DECL = fn_decl_node;
   free(identifier);
+  return node;
+}
+
+AST_NODE* parse_is_decl_stmt(PARSER* self) {
+  free(eat(self));
+
+  AST_NODE* condition =
+      at(self)->kind == TOK_OPEN_PAREN ? parse_stmt(self) : parse_expr(self);
+
+  AST_NODE* node = make_ast_node(IS_STMT);
+  node->IS_DECL_STMT = malloc(sizeof(AST_NODE_IS_STMT));
+  node->IS_DECL_STMT->condition = condition;
+
+  AST_NODE_ARRAY* body = malloc(sizeof(AST_NODE_ARRAY));
+  node->IS_DECL_STMT->body = body;
+  body->count = 0;
+  body->capacity = 16;
+  body->array = malloc(sizeof(AST_NODE*) * body->capacity);
+
+  while (at(self)->kind != TOK_EOF && at(self)->kind != TOK_CLOSING_PAREN) {
+    GROW_AST_NODE_ARRAY(body, parse_stmt(self));
+  }
+
+  node->IS_DECL_STMT->else_body = 0;
+
+  if (self->tokens->array[self->current_token + 1]->kind == TOK_OPEN_PAREN &&
+      self->tokens->array[self->current_token + 2]->kind == TOK_ELSE) {
+    free(eat(self));
+    free(eat(self));
+    free(eat(self));
+
+    AST_NODE_ARRAY* else_body = malloc(sizeof(AST_NODE_ARRAY));
+    node->IS_DECL_STMT->else_body = else_body;
+    else_body->count = 0;
+    else_body->capacity = 16;
+    else_body->array = malloc(sizeof(AST_NODE*) * else_body->capacity);
+
+    while (at(self)->kind != TOK_EOF && at(self)->kind != TOK_CLOSING_PAREN) {
+      GROW_AST_NODE_ARRAY(else_body, parse_stmt(self));
+    }
+  }
+
   return node;
 }
 

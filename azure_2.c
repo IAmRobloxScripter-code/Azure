@@ -85,6 +85,11 @@ int is_global_function(COMPILER* self, const char* name) {
 void compile_fn_decl(COMPILER* self, AST_NODE_FN_DECL* node) {
   APPEND_DYNAMIC_STR(self->code, node->name);
   APPEND_DYNAMIC_STR(self->code, ":\npush rbp\nmov rbp, rsp\n");
+  DYNAMIC_STR* last_code = self->code;
+  self->code = malloc(sizeof(DYNAMIC_STR));
+  self->code->count = 0;
+  self->code->capacity = 16;
+  self->code->value = malloc(sizeof(char*) * self->code->capacity);
 
   if (self->defined_functions_count >= self->defined_functions_capacity) {
     self->defined_functions_capacity *= 2;
@@ -143,9 +148,18 @@ void compile_fn_decl(COMPILER* self, AST_NODE_FN_DECL* node) {
   }
 
   if (node->body->array[node->body->count - 1]->kind != RETURN_EXPR) {
-    APPEND_DYNAMIC_STR(self->code, "pop rbp\nmov rax, 0\nret\n")
+    APPEND_DYNAMIC_STR(self->code, "add rsp, ");
+    APPEND_DYNAMIC_STR(self->code, to_string(8 + stack_frame->rbp));
+    APPEND_DYNAMIC_STR(self->code, "\npop rbp\nmov rax, 0\nret\n");
   }
 
+  APPEND_DYNAMIC_STR(last_code, "sub rsp, ");
+  APPEND_DYNAMIC_STR(last_code, to_string(8 + stack_frame->rbp));
+  APPEND_DYNAMIC_STR(last_code, "\n");
+  APPEND_DYNAMIC_STR(last_code, self->code->value);
+
+  free(self->code);
+  self->code = last_code;
   self->stack_frame_count -= 1;
   free(stack_frame->variables);
   free(stack_frame);
@@ -220,6 +234,153 @@ void string_make(COMPILER* self, AST_NODE* node) {
   }
 }
 
+void compile_is_stmt(COMPILER* self, AST_NODE_IS_STMT* node) {
+  self->is_count++;
+
+  DYNAMIC_STR* label_name = malloc(sizeof(DYNAMIC_STR));
+  label_name->count = 0;
+  label_name->capacity = 16;
+  label_name->value = malloc(sizeof(char) * label_name->capacity);
+
+  APPEND_DYNAMIC_STR(label_name, "IS");
+  APPEND_DYNAMIC_STR(label_name, to_string(self->is_count - 1));
+
+  if (node->condition->kind == IDENTIFIER_LITERAL) {
+    compile_stmt(self, node->condition);
+    APPEND_DYNAMIC_STR(self->code, "cmp rax, 0\n");
+    APPEND_DYNAMIC_STR(self->code, "jne ");
+    APPEND_DYNAMIC_STR(self->code, label_name->value);
+    APPEND_DYNAMIC_STR(self->code, "\n");
+    if (node->else_body != 0) {
+      APPEND_DYNAMIC_STR(self->code, "jmp ");
+      APPEND_DYNAMIC_STR(self->code, label_name->value);
+      APPEND_DYNAMIC_STR(self->code, "_ELSE\n");
+    } else {
+      APPEND_DYNAMIC_STR(self->code, "jmp ");
+      APPEND_DYNAMIC_STR(self->code, label_name->value);
+      APPEND_DYNAMIC_STR(self->code, "_END\n");
+    }
+    self->is_rax_in_use = 0;
+  } else if (node->condition->kind == BINARY_EXPR) {
+    self->is_rax_in_use = 0;
+    compile_stmt(self, node->condition->BINARY_EXPR->left);
+    APPEND_DYNAMIC_STR(self->code, "push rax\n");
+    compile_stmt(self, node->condition->BINARY_EXPR->right);
+    APPEND_DYNAMIC_STR(self->code, "push r8\n");
+
+    APPEND_DYNAMIC_STR(self->code, "pop r8\n");
+    APPEND_DYNAMIC_STR(self->code, "pop rax\n");
+
+    APPEND_DYNAMIC_STR(self->code, "cmp rax, r8\n");
+
+    if (strcmp(node->condition->BINARY_EXPR->operator, "==") == 0) {
+      APPEND_DYNAMIC_STR(self->code, "je ");
+      APPEND_DYNAMIC_STR(self->code, label_name->value);
+    } else if (strcmp(node->condition->BINARY_EXPR->operator, "!=") == 0) {
+      APPEND_DYNAMIC_STR(self->code, "jne ");
+      APPEND_DYNAMIC_STR(self->code, label_name->value);
+    } else if (strcmp(node->condition->BINARY_EXPR->operator, ">") == 0) {
+      APPEND_DYNAMIC_STR(self->code, "jg ");
+      APPEND_DYNAMIC_STR(self->code, label_name->value);
+    } else if (strcmp(node->condition->BINARY_EXPR->operator, "<") == 0) {
+      APPEND_DYNAMIC_STR(self->code, "jl ");
+      APPEND_DYNAMIC_STR(self->code, label_name->value);
+    } else if (strcmp(node->condition->BINARY_EXPR->operator, ">=") == 0) {
+      APPEND_DYNAMIC_STR(self->code, "jge ");
+      APPEND_DYNAMIC_STR(self->code, label_name->value);
+    } else if (strcmp(node->condition->BINARY_EXPR->operator, "<=") == 0) {
+      APPEND_DYNAMIC_STR(self->code, "jle ");
+      APPEND_DYNAMIC_STR(self->code, label_name->value);
+    }
+
+    APPEND_DYNAMIC_STR(self->code, "\n");
+    if (node->else_body != 0) {
+      APPEND_DYNAMIC_STR(self->code, "jmp ");
+      APPEND_DYNAMIC_STR(self->code, label_name->value);
+      APPEND_DYNAMIC_STR(self->code, "_ELSE\n");
+    } else {
+      APPEND_DYNAMIC_STR(self->code, "jmp ");
+      APPEND_DYNAMIC_STR(self->code, label_name->value);
+      APPEND_DYNAMIC_STR(self->code, "_END\n");
+    }
+    self->is_rax_in_use = 0;
+  }
+
+  APPEND_DYNAMIC_STR(self->code, label_name->value);
+  APPEND_DYNAMIC_STR(self->code, ":\n");
+
+  for (uint index = 0; index < node->body->count; ++index) {
+    compile_stmt(self, node->body->array[index]);
+  }
+
+  APPEND_DYNAMIC_STR(self->code, "jmp ");
+  APPEND_DYNAMIC_STR(self->code, label_name->value);
+  APPEND_DYNAMIC_STR(self->code, "_END\n");
+
+  if (node->else_body != 0) {
+    APPEND_DYNAMIC_STR(self->code, label_name->value);
+    APPEND_DYNAMIC_STR(self->code, "_ELSE:\n");
+
+    for (uint index = 0; index < node->else_body->count; ++index) {
+      compile_stmt(self, node->else_body->array[index]);
+    }
+
+    APPEND_DYNAMIC_STR(self->code, "jmp ");
+    APPEND_DYNAMIC_STR(self->code, label_name->value);
+    APPEND_DYNAMIC_STR(self->code, "_END\n");
+  }
+
+  APPEND_DYNAMIC_STR(self->code, label_name->value);
+  APPEND_DYNAMIC_STR(self->code, "_END:\n");
+}
+
+void compile_break_stmt(COMPILER* self, AST_NODE* node) {
+  APPEND_DYNAMIC_STR(self->code, "jmp ");
+  APPEND_DYNAMIC_STR(self->code, self->loop_stack[self->loop_stack_count - 1]);
+  APPEND_DYNAMIC_STR(self->code, "_END\n");
+  free(node);
+}
+
+void compile_continue_stmt(COMPILER* self, AST_NODE* node) {
+  APPEND_DYNAMIC_STR(self->code, "jmp ");
+  APPEND_DYNAMIC_STR(self->code, self->loop_stack[self->loop_stack_count - 1]);
+  APPEND_DYNAMIC_STR(self->code, "\n");
+  free(node);
+}
+
+void compile_loop_stmt(COMPILER* self, AST_NODE_LOOP_STMT* node) {
+  self->loop_count++;
+  DYNAMIC_STR* label_name = malloc(sizeof(DYNAMIC_STR));
+  label_name->count = 0;
+  label_name->capacity = 16;
+  label_name->value = malloc(sizeof(char) * label_name->capacity);
+
+  if (self->loop_stack_count >= self->loop_stack_capacity) {
+    self->loop_stack_capacity *= 2;
+    self->loop_stack =
+        realloc(self->loop_stack, sizeof(char*) * self->loop_stack_capacity);
+  }
+
+  self->loop_stack[self->loop_stack_count++] = label_name->value;
+
+  APPEND_DYNAMIC_STR(label_name, "L");
+  APPEND_DYNAMIC_STR(label_name, to_string(self->loop_count - 1));
+
+  APPEND_DYNAMIC_STR(self->code, label_name->value);
+  APPEND_DYNAMIC_STR(self->code, ":\n");
+
+  for (uint index = 0; index < node->body->count; ++index) {
+    compile_stmt(self, node->body->array[index]);
+  }
+  self->loop_stack_count--;
+  APPEND_DYNAMIC_STR(self->code, "jmp ");
+  APPEND_DYNAMIC_STR(self->code, label_name->value);
+  APPEND_DYNAMIC_STR(self->code, "\n");
+  APPEND_DYNAMIC_STR(self->code, label_name->value);
+  APPEND_DYNAMIC_STR(self->code, "_END:\n");
+  free(label_name);
+};
+
 void compile_literal(COMPILER* self, AST_NODE* node) {
   switch (node->kind) {
     case NUMBER_LITERAL: {
@@ -282,7 +443,11 @@ void compile_literal(COMPILER* self, AST_NODE* node) {
 
 void compile_return_expr(COMPILER* self, AST_NODE_RETURN_EXPR* node) {
   compile_stmt(self, node->return_value);
-  APPEND_DYNAMIC_STR(self->code, "pop rbp\nret\n")
+  APPEND_DYNAMIC_STR(self->code, "add rsp, ");
+  APPEND_DYNAMIC_STR(
+      self->code,
+      to_string(8 + self->stack_frames[self->stack_frame_count - 1]->rbp));
+  APPEND_DYNAMIC_STR(self->code, "\npop rbp\nret\n")
   self->is_rax_in_use = 0;
 }
 
@@ -340,10 +505,29 @@ void compile_binary_expr(COMPILER* self, AST_NODE_BINARY_EXPR* node) {
   APPEND_DYNAMIC_STR(self->code, "pop r8\n");
   APPEND_DYNAMIC_STR(self->code, "pop rax\n");
 
-  if (node->operator == '+') APPEND_DYNAMIC_STR(self->code, "add rax, r8\n");
-  if (node->operator == '-') APPEND_DYNAMIC_STR(self->code, "sub rax, r8\n");
-  if (node->operator == '*') APPEND_DYNAMIC_STR(self->code, "imul rax, r8\n");
-  if (node->operator == '/') APPEND_DYNAMIC_STR(self->code, "idiv rax, r8\n");
+  if (strcmp(node->operator, "+") == 0)
+    APPEND_DYNAMIC_STR(self->code, "add rax, r8\n");
+  if (strcmp(node->operator, "-") == 0)
+    APPEND_DYNAMIC_STR(self->code, "sub rax, r8\n");
+  if (strcmp(node->operator, "*") == 0)
+    APPEND_DYNAMIC_STR(self->code, "imul rax, r8\n");
+  if (strcmp(node->operator, "/") == 0)
+    APPEND_DYNAMIC_STR(self->code, "idiv rax, r8\n");
+}
+
+void compile_assignment_expr(COMPILER* self, AST_NODE_BINARY_EXPR* node) {
+  if (node->left->kind == IDENTIFIER_LITERAL) {
+    VARIABLE* variable =
+        find_variable(self->stack_frames[self->stack_frame_count - 1],
+                      node->left->VALUE_IDENTIFIER_LITERAL->value);
+    compile_stmt(self, node->right);
+    APPEND_DYNAMIC_STR(self->code, "mov ");
+    APPEND_DYNAMIC_STR(self->code, variable->str_size);
+    APPEND_DYNAMIC_STR(self->code, " [rbp-");
+    APPEND_DYNAMIC_STR(self->code, to_string(variable->rbp_end));
+    APPEND_DYNAMIC_STR(self->code, "], rax\n");
+    self->is_rax_in_use = 0;
+  }
 }
 
 void compile_var_decl(COMPILER* self, AST_NODE_VAR_DECL* node) {
@@ -521,6 +705,9 @@ void compile_stmt(COMPILER* self, AST_NODE* node) {
     case IDENTIFIER_LITERAL:
       compile_literal(self, node);
       break;
+    case ASSIGNMENT_EXPR:
+      compile_assignment_expr(self, node->BINARY_EXPR);
+      break;
     case CALL_EXPR:
       compile_call_expr(self, node->CALL_EXPR);
       break;
@@ -529,6 +716,18 @@ void compile_stmt(COMPILER* self, AST_NODE* node) {
       break;
     case EXTERN_EXPR:
       compile_extern_expr(self, node->EXTERN_EXPR);
+      break;
+    case IS_STMT:
+      compile_is_stmt(self, node->IS_DECL_STMT);
+      break;
+    case LOOP_STMT:
+      compile_loop_stmt(self, node->LOOP_DECL_STMT);
+      break;
+    case BREAK_EXPR:
+      compile_break_stmt(self, node);
+      break;
+    case CONTINUE_EXPR:
+      compile_continue_stmt(self, node);
       break;
     default:
       break;
@@ -563,6 +762,12 @@ const char* compile(AST_NODE_ARRAY* ast) {
   compiler->code = code;
   compiler->top_code = top_code;
   compiler->is_rax_in_use = 0;
+  compiler->loop_count = 0;
+  compiler->is_count = 0;
+
+  compiler->loop_stack_count = 0;
+  compiler->loop_stack_capacity = 16;
+  compiler->loop_stack = malloc(sizeof(char*) * compiler->loop_stack_count);
 
   compiler->defined_functions_count = 0;
   compiler->defined_functions_capacity = 16;

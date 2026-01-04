@@ -35,6 +35,11 @@ typedef struct COMPILER {
   uint stack_frame_count;
   uint stack_frame_capacity;
   AST_NODE_ARRAY* ast;
+
+  char** loop_stack;
+  uint loop_stack_count;
+  uint loop_stack_capacity;
+
   char** defined_functions;
   uint defined_functions_count;
   uint defined_functions_capacity;
@@ -42,7 +47,10 @@ typedef struct COMPILER {
   STRING_MEMORY_ADDRESS** strings;
   uint strings_count;
   uint strings_capacity;
+  
   int is_rax_in_use;
+  uint loop_count;
+  uint is_count;
 } COMPILER;
 
 extern const char* registers[];

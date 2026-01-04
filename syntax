@@ -16,6 +16,8 @@
             (= result (double result))
             (stop)
             (continue)
+        ) (else
+            
         )
     )
 

@@ -35,6 +35,8 @@ int main(int argc, char* argv[]) {  // this was made by claude cuz idk how
   AST_NODE_ARRAY* ast = parse_tokens(tokens, argv[1]);
   const char* assembly = compile(ast);
 
+  // printf("%s\n", assembly);
+
   char* exe_name = "a.out";
   char link_files[1024] = "";
 

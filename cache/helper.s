@@ -1,5 +1,3 @@
-section .data
-    nl: db 10
 section .text
 global write
 write:
